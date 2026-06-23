@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import asyncio
 import aiohttp
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -48,7 +49,6 @@ def check():
     names = data.get("names", [])
     if not names or len(names) > 500:
         return jsonify({"error": "Provide between 1 and 500 names."}), 400
-
     names = list(dict.fromkeys([n.strip() for n in names if n.strip()]))
     results = asyncio.run(fetch_all(names))
     return jsonify(results)
@@ -60,4 +60,5 @@ def index():
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
