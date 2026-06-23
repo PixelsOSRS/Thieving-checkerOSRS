@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: thieving-checker
+    runtime: python
+    buildCommand: pip install flask flask-cors aiohttp
+    startCommand: python app.py
