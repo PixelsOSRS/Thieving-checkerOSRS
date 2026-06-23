@@ -3,75 +3,54 @@ from flask_cors import CORS
 import asyncio
 import aiohttp
 import os
-import random
 
 app = Flask(__name__)
 CORS(app)
 
-BATCH_SIZE = 3
-DELAY = 3.0
-RETRIES = 3
+BATCH_SIZE = 10
+DELAY = 0.5
+RETRIES = 2
 
-# CSV endpoint, minder strict dan JSON
-URL = "https://secure.runescape.com/m=hiscore_oldschool/index_lite.ws?player={}"
-
-SKILL_ORDER = [
-    "overall","attack","defence","strength","hitpoints","ranged","prayer","magic",
-    "cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing",
-    "mining","herblore","agility","thieving","slayer","farming","runecrafting",
-    "hunter","construction"
-]
-THIEVING_INDEX = SKILL_ORDER.index("thieving")  # 18
-
-AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-]
+WOM_URL = "https://api.wiseoldman.net/v2/players/{}"
 
 
 async def fetch_thieving(session, semaphore, name, attempt=0):
     async with semaphore:
         headers = {
-            "User-Agent": random.choice(AGENTS),
-            "Accept": "text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "osrs-thieving-checker/1.0",
+            "Accept": "application/json",
         }
         try:
-            encoded = aiohttp.helpers.quote(name, safe="")
-            async with session.get(URL.format(encoded), headers=headers,
+            encoded = aiohttp.helpers.quote(name.lower().replace(" ", "_"), safe="")
+            async with session.get(WOM_URL.format(encoded), headers=headers,
                                    timeout=aiohttp.ClientTimeout(total=15)) as r:
                 if r.status == 404:
-                    return {"name": name, "level": None, "error": "player not found"}
-                if r.status in (503, 429):
+                    return {"name": name, "level": None, "error": "not found on WOM"}
+                if r.status == 429:
                     if attempt < RETRIES:
-                        await asyncio.sleep(4 * (attempt + 1))
+                        await asyncio.sleep(5)
                         return await fetch_thieving(session, semaphore, name, attempt + 1)
-                    return {"name": name, "level": None, "error": f"rate limited (HTTP {r.status})"}
+                    return {"name": name, "level": None, "error": "rate limited"}
                 if r.status != 200:
                     return {"name": name, "level": None, "error": f"HTTP {r.status}"}
 
-                text = await r.text()
-                if not text or not text.strip():
-                    if attempt < RETRIES:
-                        await asyncio.sleep(4 * (attempt + 1))
-                        return await fetch_thieving(session, semaphore, name, attempt + 1)
-                    return {"name": name, "level": None, "error": "empty response (IP blocked?)"}
+                data = await r.json(content_type=None)
+                lvl = (data
+                       .get("latestSnapshot", {})
+                       .get("data", {})
+                       .get("skills", {})
+                       .get("thieving", {})
+                       .get("level"))
 
-                lines = text.strip().split("\n")
-                if len(lines) <= THIEVING_INDEX:
-                    return {"name": name, "level": None, "error": "not enough data"}
-
-                parts = lines[THIEVING_INDEX].split(",")
-                lvl = int(parts[1])
+                if lvl is None:
+                    return {"name": name, "level": None, "error": "no thieving data"}
                 if lvl < 1:
                     return {"name": name, "level": None, "error": "not on hiscores"}
                 return {"name": name, "level": lvl, "error": None}
 
         except asyncio.TimeoutError:
             if attempt < RETRIES:
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
                 return await fetch_thieving(session, semaphore, name, attempt + 1)
             return {"name": name, "level": None, "error": "timeout"}
         except Exception as e:
